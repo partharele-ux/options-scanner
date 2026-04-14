@@ -2,6 +2,9 @@ import requests
 import time
 from telegram_bot import send_message
 
+# -------------------------------
+# FETCH NSE OPTION CHAIN
+# -------------------------------
 def get_option_chain(symbol):
     url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
 
@@ -13,82 +16,93 @@ def get_option_chain(symbol):
 
     session = requests.Session()
 
-    # Step 1: Get cookies
-    session.get("https://www.nseindia.com", headers=headers)
-    time.sleep(1)
+    try:
+        # Get cookies
+        session.get("https://www.nseindia.com", headers=headers)
+        time.sleep(1)
 
-    # Step 2: Fetch data
-    response = session.get(url, headers=headers)
+        # Fetch data
+        response = session.get(url, headers=headers)
 
-    if response.status_code != 200:
+        if response.status_code != 200:
+            return None
+
+        return response.json()
+
+    except:
         return None
 
-    return response.json()
 
+# -------------------------------
+# ANALYSIS LOGIC (ATM BASED)
+# -------------------------------
 def analyze(symbol):
-    data = get_option_chain(symbol)
+    try:
+        data = get_option_chain(symbol)
 
-    if not data:
-        return f"{symbol} - Data fetch failed"
+        if not data:
+            return f"{symbol} - Data fetch failed"
 
-    records = data["records"]["data"]
+        records = data["records"]["data"]
+        spot = data["records"].get("underlyingValue", 0)
 
-    spot = data["records"]["underlyingValue"]
+        closest = None
+        min_diff = float("inf")
 
-closest = None
-min_diff = float("inf")
+        # Find ATM strike
+        for item in records:
+            strike = item.get("strikePrice", 0)
+            diff = abs(strike - spot)
 
-# Find ATM strike
-for item in records:
-    strike = item["strikePrice"]
-    diff = abs(strike - spot)
+            if diff < min_diff:
+                min_diff = diff
+                closest = item
 
-    if diff < min_diff:
-        min_diff = diff
-        closest = item
+        if not closest:
+            return f"{symbol}: No data"
 
-if not closest:
-    return f"{symbol}: No data"
+        ce = closest.get("CE", {})
+        pe = closest.get("PE", {})
 
-ce = closest.get("CE", {})
-pe = closest.get("PE", {})
+        call_oi_change = ce.get("changeinOpenInterest", 0)
+        put_oi_change = pe.get("changeinOpenInterest", 0)
 
-call_oi_change = ce.get("changeinOpenInterest", 0)
-put_oi_change = pe.get("changeinOpenInterest", 0)
+        strike = closest.get("strikePrice", 0)
 
-strike = closest["strikePrice"]
+        # -------------------------------
+        # STRATEGY LOGIC
+        # -------------------------------
+        if call_oi_change < 0 and put_oi_change > 0:
+            return f"{symbol}: BUY CALL near {strike}"
 
-# STRONG LOGIC
-if call_oi_change < 0 and put_oi_change > 0:
-    return f"{symbol}: BUY CALL near {strike}"
+        if put_oi_change < 0 and call_oi_change > 0:
+            return f"{symbol}: BUY PUT near {strike}"
 
-if put_oi_change < 0 and call_oi_change > 0:
-    return f"{symbol}: BUY PUT near {strike}"
+        return f"{symbol}: No clear signal"
 
-return f"{symbol}: No clear signal"
-    return f"{symbol}: No signal"
+    except Exception as e:
+        return f"{symbol} ERROR: {str(e)}"
 
+
+# -------------------------------
+# STOCK LIST (SAFE LIMIT)
+# -------------------------------
 stocks = [
     "RELIANCE","SBIN","TATAMOTORS","INFY","HDFCBANK",
     "ICICIBANK","AXISBANK","LT","ITC","KOTAKBANK"
 ]
 
+
+# -------------------------------
+# MAIN EXECUTION
+# -------------------------------
 for stock in stocks:
     signal = analyze(stock)
+
+    # Send only actionable signals
     if "BUY" in signal:
-    send_message(signal)
-    time.sleep(2)  # avoid blocking
+        send_message(signal)
 
-from datetime import datetime
+    print(signal)  # for logs
 
-def is_market_open():
-    now = datetime.now()
-    if now.weekday() >= 5:  # Sat/Sun
-        return False
-    if now.hour < 9 or now.hour > 15:
-        return False
-    return True
-
-if not is_market_open():
-    print("Market closed")
-    exit()
+    time.sleep(2)  # avoid NSE blocking
