@@ -50,7 +50,10 @@ def analyze(symbol):
 
     return f"{symbol}: No signal"
 
-stocks = ["RELIANCE", "SBIN", "TATAMOTORS"]
+stocks = [
+    "RELIANCE","SBIN","TATAMOTORS","INFY","HDFCBANK",
+    "ICICIBANK","AXISBANK","LT","ITC","KOTAKBANK"
+]
 
 for stock in stocks:
     signal = analyze(stock)
