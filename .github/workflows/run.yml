@@ -1,7 +1,7 @@
 name: Run Scanner
 
-on:
-  schedule:
+workflow_dispatch:
+schedule:
     - cron: "*/5 4-10 * * 1-5"
 
 jobs:
