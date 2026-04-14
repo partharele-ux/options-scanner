@@ -59,3 +59,17 @@ for stock in stocks:
     signal = analyze(stock)
     send_message(signal)
     time.sleep(2)  # avoid blocking
+
+from datetime import datetime
+
+def is_market_open():
+    now = datetime.now()
+    if now.weekday() >= 5:  # Sat/Sun
+        return False
+    if now.hour < 9 or now.hour > 15:
+        return False
+    return True
+
+if not is_market_open():
+    print("Market closed")
+    exit()
