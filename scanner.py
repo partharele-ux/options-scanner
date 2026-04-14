@@ -33,21 +33,39 @@ def analyze(symbol):
 
     records = data["records"]["data"]
 
-    for item in records:
-        if "CE" in item and "PE" in item:
+    spot = data["records"]["underlyingValue"]
 
-            call_oi_change = item["CE"].get("changeinOpenInterest", 0)
-            put_oi_change = item["PE"].get("changeinOpenInterest", 0)
+closest = None
+min_diff = float("inf")
 
-            strike = item["strikePrice"]
+# Find ATM strike
+for item in records:
+    strike = item["strikePrice"]
+    diff = abs(strike - spot)
 
-            # SIMPLE LOGIC
-            if call_oi_change < 0:
-                return f"{symbol}: BUY CALL near {strike}"
+    if diff < min_diff:
+        min_diff = diff
+        closest = item
 
-            if put_oi_change < 0:
-                return f"{symbol}: BUY PUT near {strike}"
+if not closest:
+    return f"{symbol}: No data"
 
+ce = closest.get("CE", {})
+pe = closest.get("PE", {})
+
+call_oi_change = ce.get("changeinOpenInterest", 0)
+put_oi_change = pe.get("changeinOpenInterest", 0)
+
+strike = closest["strikePrice"]
+
+# STRONG LOGIC
+if call_oi_change < 0 and put_oi_change > 0:
+    return f"{symbol}: BUY CALL near {strike}"
+
+if put_oi_change < 0 and call_oi_change > 0:
+    return f"{symbol}: BUY PUT near {strike}"
+
+return f"{symbol}: No clear signal"
     return f"{symbol}: No signal"
 
 stocks = [
@@ -57,6 +75,7 @@ stocks = [
 
 for stock in stocks:
     signal = analyze(stock)
+    if "BUY" in signal:
     send_message(signal)
     time.sleep(2)  # avoid blocking
 
