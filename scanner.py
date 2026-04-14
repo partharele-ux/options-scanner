@@ -1,4 +1,5 @@
 import requests
+import time
 from telegram_bot import send_message
 
 def get_option_chain(symbol):
@@ -6,24 +7,34 @@ def get_option_chain(symbol):
 
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9"
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br"
     }
 
     session = requests.Session()
+
+    # Step 1: Get cookies
     session.get("https://www.nseindia.com", headers=headers)
+    time.sleep(1)
 
+    # Step 2: Fetch data
     response = session.get(url, headers=headers)
-    data = response.json()
 
-    return data
+    if response.status_code != 200:
+        return None
+
+    return response.json()
 
 def analyze(symbol):
     data = get_option_chain(symbol)
 
+    if not data:
+        return f"{symbol} - Data fetch failed"
+
     records = data["records"]["data"]
 
     for item in records:
-        if item.get("CE") and item.get("PE"):
+        if "CE" in item and "PE" in item:
 
             call_oi_change = item["CE"].get("changeinOpenInterest", 0)
             put_oi_change = item["PE"].get("changeinOpenInterest", 0)
@@ -32,17 +43,16 @@ def analyze(symbol):
 
             # SIMPLE LOGIC
             if call_oi_change < 0:
-                return f"{symbol} BUY CALL near {strike}"
+                return f"{symbol}: BUY CALL near {strike}"
 
             if put_oi_change < 0:
-                return f"{symbol} BUY PUT near {strike}"
+                return f"{symbol}: BUY PUT near {strike}"
 
-    return None
+    return f"{symbol}: No signal"
 
 stocks = ["RELIANCE", "SBIN", "TATAMOTORS"]
 
 for stock in stocks:
     signal = analyze(stock)
-
-    if signal:
-        send_message(signal)
+    send_message(signal)
+    time.sleep(2)  # avoid blocking
