@@ -9,8 +9,8 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 SYMBOLS = [
     "NIFTY","BANKNIFTY",
-    "RELIANCE","SBIN","INFY",
-    "HDFCBANK","ICICIBANK","AXISBANK"
+    "RELIANCE","HDFCBANK","ICICIBANK",
+    "SBIN","INFY","AXISBANK"
 ]
 
 # ======================
@@ -24,11 +24,16 @@ def send_message(msg):
         pass
 
 # ======================
-# TIME
+# TIME FILTER (LOOSENED)
 # ======================
-def get_time():
+def valid_time():
     tz = pytz.timezone("Asia/Kolkata")
-    return datetime.now(tz)
+    now = datetime.now(tz)
+
+    if now.hour < 9 or now.hour > 15:
+        return False
+
+    return True
 
 # ======================
 # DATA FETCH
@@ -51,7 +56,7 @@ def get_data(symbol):
         return None
 
 # ======================
-# ANALYSIS (SMART FILTER)
+# ANALYSIS (HYBRID)
 # ======================
 def analyze(symbol):
     data = get_data(symbol)
@@ -65,15 +70,15 @@ def analyze(symbol):
         call_total = 0
         put_total = 0
 
-        best_trade = None
+        strong_signal = None
+        medium_signal = None
 
         for r in records:
             if "CE" in r and "PE" in r:
 
                 strike = r["strikePrice"]
 
-                # Focus ATM ±150
-                if abs(strike - price) > 150:
+                if abs(strike - price) > 200:
                     continue
 
                 call_oi = r["CE"].get("changeinOpenInterest", 0)
@@ -82,59 +87,62 @@ def analyze(symbol):
                 call_total += call_oi
                 put_total += put_oi
 
-                # 🔥 STRONG CONDITION ONLY
+                # 🟢 HIGH CONFIDENCE
                 if call_oi < -20000 and put_oi > 20000:
-                    entry = round(price + 10, 2)
-                    sl = round(price - 80, 2)
-                    target = round(price + 150, 2)
+                    strong_signal = f"""
+{symbol} 🟢 STRONG CALL
 
-                    best_trade = f"""
-{symbol} 🟢 CALL
-
-Entry: {entry}
-SL: {sl}
-Target: {target}
+Entry: {round(price+10,2)}
+SL: {round(price-80,2)}
+Target: {round(price+150,2)}
 """
 
                 elif put_oi < -20000 and call_oi > 20000:
-                    entry = round(price - 10, 2)
-                    sl = round(price + 80, 2)
-                    target = round(price - 150, 2)
+                    strong_signal = f"""
+{symbol} 🔴 STRONG PUT
 
-                    best_trade = f"""
-{symbol} 🔴 PUT
-
-Entry: {entry}
-SL: {sl}
-Target: {target}
+Entry: {round(price-10,2)}
+SL: {round(price+80,2)}
+Target: {round(price-150,2)}
 """
 
-        return best_trade
+                # ⚡ MEDIUM CONFIDENCE
+                elif call_oi < -10000 and put_oi > 10000:
+                    medium_signal = f"{symbol} ⚡ CALL near {strike}"
+
+                elif put_oi < -10000 and call_oi > 10000:
+                    medium_signal = f"{symbol} ⚡ PUT near {strike}"
+
+        # Priority: strong > medium
+        return strong_signal if strong_signal else medium_signal
 
     except:
         return None
 
 # ======================
-# MAIN ENGINE
+# MAIN
 # ======================
 def run():
+    if not valid_time():
+        print("Outside hours")
+        return
+
     trades = []
 
     for sym in SYMBOLS:
-        trade = analyze(sym)
+        t = analyze(sym)
 
-        if trade:
-            trades.append(trade)
+        if t:
+            trades.append(t)
 
         time.sleep(1)
 
-    msg = "📊 TRADING SETUPS\n\n"
+    msg = "📊 TRADING ENGINE\n\n"
 
     if trades:
-        # Limit best 3
-        msg += "\n".join(trades[:3])
+        msg += "\n".join(trades[:4])  # max 4 trades
     else:
-        msg += "⚠️ No high-probability trades right now"
+        msg += "⚠️ No setups currently"
 
     send_message(msg)
 
