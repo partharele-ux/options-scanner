@@ -2,7 +2,7 @@ name: Run Scanner
 
 on:
   schedule:
-    - cron: "*/5 4-10 * * 1-5"  # Every 5 min (IST market hours approx)
+    - cron: "*/5 4-10 * * 1-5"   # Every 5 min (IST market hours)
   workflow_dispatch:
 
 jobs:
@@ -22,7 +22,4 @@ jobs:
         run: pip install requests pytz
 
       - name: Run scanner
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python scanner.py
