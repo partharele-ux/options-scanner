@@ -7,10 +7,17 @@ import pytz
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-SYMBOLS = [
+# ======================
+# FULL F&O STOCK LIST
+# ======================
+ALL_SYMBOLS = [
     "NIFTY","BANKNIFTY",
-    "RELIANCE","HDFCBANK","ICICIBANK",
-    "SBIN","INFY","AXISBANK"
+    "HDFCBANK","ICICIBANK","AXISBANK","SBIN","KOTAKBANK","INDUSINDBK","PNB","BANKBARODA",
+    "INFY","TCS","WIPRO","HCLTECH","TECHM",
+    "RELIANCE","LT","ITC","ASIANPAINT","ULTRACEMCO",
+    "TATAMOTORS","MARUTI","M&M","HEROMOTOCO","EICHERMOT",
+    "BAJFINANCE","BAJAJFINSV","HDFCLIFE","SBILIFE","ICICIPRULI",
+    "ADANIPORTS","ADANIENT","JSWSTEEL","TATASTEEL","COALINDIA","POWERGRID"
 ]
 
 # ======================
@@ -24,19 +31,24 @@ def send_message(msg):
         pass
 
 # ======================
-# TIME FILTER (LOOSENED)
+# TIME
 # ======================
-def valid_time():
+def get_time():
     tz = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(tz)
-
-    if now.hour < 9 or now.hour > 15:
-        return False
-
-    return True
+    return datetime.now(tz)
 
 # ======================
-# DATA FETCH
+# ROTATION SYSTEM
+# ======================
+def get_batch():
+    now = get_time()
+    batch_size = 8
+
+    index = (now.minute // 5 * batch_size) % len(ALL_SYMBOLS)
+    return ALL_SYMBOLS[index:index + batch_size]
+
+# ======================
+# FETCH DATA
 # ======================
 def get_data(symbol):
     try:
@@ -56,7 +68,7 @@ def get_data(symbol):
         return None
 
 # ======================
-# ANALYSIS (HYBRID)
+# ANALYSIS (BALANCED)
 # ======================
 def analyze(symbol):
     data = get_data(symbol)
@@ -70,66 +82,43 @@ def analyze(symbol):
         call_total = 0
         put_total = 0
 
-        strong_signal = None
-        medium_signal = None
-
         for r in records:
             if "CE" in r and "PE" in r:
+                call_total += r["CE"].get("changeinOpenInterest", 0)
+                put_total += r["PE"].get("changeinOpenInterest", 0)
 
-                strike = r["strikePrice"]
+        # ======================
+        # BIAS
+        # ======================
+        if put_total > call_total:
+            direction = "CALL 🟢"
+            entry = round(price + 10, 2)
+            sl = round(price - 70, 2)
+            target = round(price + 120, 2)
 
-                if abs(strike - price) > 200:
-                    continue
+        else:
+            direction = "PUT 🔴"
+            entry = round(price - 10, 2)
+            sl = round(price + 70, 2)
+            target = round(price - 120, 2)
 
-                call_oi = r["CE"].get("changeinOpenInterest", 0)
-                put_oi = r["PE"].get("changeinOpenInterest", 0)
-
-                call_total += call_oi
-                put_total += put_oi
-
-                # 🟢 HIGH CONFIDENCE
-                if call_oi < -20000 and put_oi > 20000:
-                    strong_signal = f"""
-{symbol} 🟢 STRONG CALL
-
-Entry: {round(price+10,2)}
-SL: {round(price-80,2)}
-Target: {round(price+150,2)}
-"""
-
-                elif put_oi < -20000 and call_oi > 20000:
-                    strong_signal = f"""
-{symbol} 🔴 STRONG PUT
-
-Entry: {round(price-10,2)}
-SL: {round(price+80,2)}
-Target: {round(price-150,2)}
-"""
-
-                # ⚡ MEDIUM CONFIDENCE
-                elif call_oi < -10000 and put_oi > 10000:
-                    medium_signal = f"{symbol} ⚡ CALL near {strike}"
-
-                elif put_oi < -10000 and call_oi > 10000:
-                    medium_signal = f"{symbol} ⚡ PUT near {strike}"
-
-        # Priority: strong > medium
-        return strong_signal if strong_signal else medium_signal
+        return f"""{symbol} {direction}
+Entry: {entry}
+SL: {sl}
+Target: {target}"""
 
     except:
         return None
 
 # ======================
-# MAIN
+# MAIN ENGINE
 # ======================
 def run():
-    if not valid_time():
-        print("Outside hours")
-        return
+    symbols = get_batch()
 
     trades = []
 
-    for sym in SYMBOLS:
+    for sym in symbols:
         t = analyze(sym)
 
         if t:
@@ -137,12 +126,12 @@ def run():
 
         time.sleep(1)
 
-    msg = "📊 TRADING ENGINE\n\n"
+    msg = "📊 LIVE TRADING ENGINE\n\n"
 
     if trades:
-        msg += "\n".join(trades[:4])  # max 4 trades
+        msg += "\n\n".join(trades[:4])  # max 4 trades
     else:
-        msg += "⚠️ No setups currently"
+        msg += "⚠️ No setups in this batch"
 
     send_message(msg)
 
