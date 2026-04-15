@@ -2,205 +2,136 @@ import requests
 import time
 import os
 from datetime import datetime
+import pytz
 
+# =========================
+# CONFIG
+# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-stocks = ["NIFTY","BANKNIFTY","RELIANCE","HDFCBANK","ICICIBANK","SBIN"]
+# F&O + Indices
+SYMBOLS = [
+    "NIFTY", "BANKNIFTY", "RELIANCE", "SBIN", "TATAMOTORS",
+    "INFY", "HDFCBANK", "ICICIBANK", "AXISBANK",
+    "LT", "ITC", "KOTAKBANK"
+]
 
-MAX_TRADES = 5
-
-session = requests.Session()
-session.headers.update({"User-Agent": "Mozilla/5.0"})
-
-trade_log = []
-cache_data = {}
-daily_sent = False
-
-
-def send_message(msg):
+# =========================
+# TELEGRAM
+# =========================
+def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    session.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    requests.post(url, data={"chat_id": CHAT_ID, "text": text})
 
 
-def get_data(symbol):
+# =========================
+# MARKET HOURS
+# =========================
+def is_market_open():
+    tz = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(tz)
+
+    if now.weekday() >= 5:
+        return False
+
+    start = now.replace(hour=9, minute=15, second=0)
+    end = now.replace(hour=15, minute=30, second=0)
+
+    return start <= now <= end
+
+
+# =========================
+# DATA FETCH
+# =========================
+def get_option_chain(symbol):
     try:
-        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
-        session.get("https://www.nseindia.com")
-        res = session.get(url, timeout=10)
+        url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
 
-        if res.status_code == 200:
-            data = res.json()
-            cache_data[symbol] = data
-            return data
+        if symbol in ["NIFTY", "BANKNIFTY"]:
+            url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+        session = requests.Session()
+        session.get("https://www.nseindia.com", headers=headers)
+
+        response = session.get(url, headers=headers)
+        return response.json()
+
     except:
-        return cache_data.get(symbol)
-
-    return None
+        return None
 
 
+# =========================
+# ANALYSIS ENGINE
+# =========================
 def analyze(symbol):
-    data = get_data(symbol)
+    data = get_option_chain(symbol)
+
     if not data:
         return None
 
-    underlying = data["records"]["underlyingValue"]
-    records = data["records"]["data"]
+    try:
+        records = data["records"]["data"]
+        underlying = data["records"]["underlyingValue"]
 
-    total_call = 0
-    total_put = 0
+        best_signal = None
 
-    atm = None
-    min_diff = float("inf")
+        for item in records:
+            if "CE" in item and "PE" in item:
 
-    for item in records:
-        if "CE" in item and "PE" in item:
-            strike = item["strikePrice"]
+                strike = item["strikePrice"]
 
-            call_oi = item["CE"].get("changeinOpenInterest", 0)
-            put_oi = item["PE"].get("changeinOpenInterest", 0)
+                # Focus near ATM (important)
+                if abs(strike - underlying) > 200:
+                    continue
 
-            total_call += call_oi
-            total_put += put_oi
+                call_oi = item["CE"].get("changeinOpenInterest", 0)
+                put_oi = item["PE"].get("changeinOpenInterest", 0)
 
-            if abs(strike - underlying) < min_diff:
-                min_diff = abs(strike - underlying)
-                atm = strike
+                # Strong directional signals
+                if call_oi < -50000 and put_oi > 50000:
+                    return f"🔥 {symbol}: BUY CALL near {strike}"
 
-    if abs(total_call - total_put) < 50000:
+                if put_oi < -50000 and call_oi > 50000:
+                    return f"🔥 {symbol}: BUY PUT near {strike}"
+
         return None
 
-    if total_call > total_put * 1.3:
-        return {
-            "symbol": symbol,
-            "direction": "PUT",
-            "entry_price": underlying,
-            "strike": atm
-        }
-
-    elif total_put > total_call * 1.3:
-        return {
-            "symbol": symbol,
-            "direction": "CALL",
-            "entry_price": underlying,
-            "strike": atm
-        }
-
-    return None
+    except:
+        return None
 
 
-# 🔥 REAL P&L CALCULATION
-def calculate_real_pnl():
-    total_pnl = 0
-    wins = 0
-    losses = 0
-
-    for trade in trade_log:
-        data = get_data(trade["symbol"])
-        if not data:
-            continue
-
-        current_price = data["records"]["underlyingValue"]
-        entry = trade["entry_price"]
-
-        if trade["direction"] == "CALL":
-            pnl = current_price - entry
-        else:
-            pnl = entry - current_price
-
-        total_pnl += pnl
-
-        if pnl > 0:
-            wins += 1
-        else:
-            losses += 1
-
-    return wins, losses, total_pnl
-
-
-def send_daily_report():
-    global daily_sent
-
-    if daily_sent:
-        return
-
-    wins, losses, pnl = calculate_real_pnl()
-    total = wins + losses
-
-    if total == 0:
-        return
-
-    winrate = round((wins / total) * 100, 2)
-
-    msg = f"""
-📊 LIVE P&L REPORT
-
-Trades: {total}
-Wins: {wins}
-Losses: {losses}
-Win Rate: {winrate}%
-Net Points: {round(pnl,2)}
-"""
-
-    send_message(msg)
-    daily_sent = True
-
-
-def is_market_open():
-    now = datetime.now()
-    if now.weekday() >= 5:
-        return False
-    return now.replace(hour=9, minute=20) <= now <= now.replace(hour=15, minute=20)
-
-
-def is_good_time():
-    now = datetime.now()
-
-    if now.hour == 9 and now.minute < 25:
-        return False
-
-    if (now.hour == 11 and now.minute > 30) or now.hour == 12 or (now.hour == 13 and now.minute < 15):
-        return False
-
-    return True
-
-
+# =========================
+# MAIN SCANNER
+# =========================
 def run():
-    send_message("🚀 Live P&L Engine Started")
+    signals = []
 
-    while True:
-        now = datetime.now()
+    for symbol in SYMBOLS:
+        signal = analyze(symbol)
 
-        if is_market_open() and is_good_time():
+        if signal:
+            signals.append(signal)
 
-            results = []
+        time.sleep(1)  # avoid blocking
 
-            for stock in stocks:
-                res = analyze(stock)
-                if res:
-                    results.append(res)
-                time.sleep(2)
-
-            results = results[:MAX_TRADES]
-
-            if results:
-                msg = "📊 TRADES:\n\n"
-
-                for trade in results:
-                    msg += f"{trade['symbol']} | {trade['direction']}\n"
-                    msg += f"Entry: {round(trade['entry_price'],2)}\n\n"
-
-                    trade_log.append(trade)
-
-                send_message(msg)
-
-            time.sleep(180)
-
-        if now.hour >= 15 and now.minute >= 30:
-            send_daily_report()
-
-        time.sleep(60)
+    if signals:
+        final_msg = "🚀 TOP TRADES:\n\n" + "\n".join(signals[:5])
+        send_message(final_msg)
+    else:
+        print("No strong signals")
 
 
+# =========================
+# EXECUTION
+# =========================
 if __name__ == "__main__":
-    run()
+    if is_market_open():
+        run()
+    else:
+        print("Market closed")
