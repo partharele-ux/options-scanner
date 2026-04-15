@@ -5,12 +5,11 @@ from datetime import datetime
 import pytz
 
 # =========================
-# CONFIG
+# CONFIG (ADD YOUR VALUES)
 # =========================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+BOT_TOKEN = "8681437580:AAEdZ_aclCZzGE1C04olNCnehdPrIPU6zhQ"
+CHAT_ID = "678428512"
 
-# F&O + Indices
 SYMBOLS = [
     "NIFTY", "BANKNIFTY", "RELIANCE", "SBIN", "TATAMOTORS",
     "INFY", "HDFCBANK", "ICICIBANK", "AXISBANK",
@@ -22,7 +21,10 @@ SYMBOLS = [
 # =========================
 def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": text})
+    try:
+        requests.post(url, data={"chat_id": CHAT_ID, "text": text})
+    except:
+        pass
 
 
 # =========================
@@ -35,14 +37,14 @@ def is_market_open():
     if now.weekday() >= 5:
         return False
 
-    start = now.replace(hour=9, minute=15, second=0)
-    end = now.replace(hour=15, minute=30, second=0)
+    start = now.replace(hour=9, minute=15)
+    end = now.replace(hour=15, minute=30)
 
     return start <= now <= end
 
 
 # =========================
-# DATA FETCH
+# FETCH DATA
 # =========================
 def get_option_chain(symbol):
     try:
@@ -67,64 +69,87 @@ def get_option_chain(symbol):
 
 
 # =========================
-# ANALYSIS ENGINE
+# ANALYSIS (CONSISTENT LOGIC)
 # =========================
 def analyze(symbol):
     data = get_option_chain(symbol)
 
     if not data:
-        return None
+        return None, None
 
     try:
         records = data["records"]["data"]
         underlying = data["records"]["underlyingValue"]
 
-        best_signal = None
+        call_strength = 0
+        put_strength = 0
+        best_trade = None
 
         for item in records:
             if "CE" in item and "PE" in item:
 
                 strike = item["strikePrice"]
 
-                # Focus near ATM (important)
-                if abs(strike - underlying) > 200:
+                # Focus ATM ±300
+                if abs(strike - underlying) > 300:
                     continue
 
                 call_oi = item["CE"].get("changeinOpenInterest", 0)
                 put_oi = item["PE"].get("changeinOpenInterest", 0)
 
-                # Strong directional signals
-                if call_oi < -50000 and put_oi > 50000:
-                    return f"🔥 {symbol}: BUY CALL near {strike}"
+                call_strength += call_oi
+                put_strength += put_oi
 
-                if put_oi < -50000 and call_oi > 50000:
-                    return f"🔥 {symbol}: BUY PUT near {strike}"
+                # Trade logic (relaxed → more signals)
+                if call_oi < -20000 and put_oi > 20000:
+                    best_trade = f"BUY CALL near {strike}"
 
-        return None
+                if put_oi < -20000 and call_oi > 20000:
+                    best_trade = f"BUY PUT near {strike}"
+
+        # Market bias
+        bias = "SIDEWAYS"
+        if put_strength > call_strength:
+            bias = "BULLISH"
+        elif call_strength > put_strength:
+            bias = "BEARISH"
+
+        return best_trade, bias
 
     except:
-        return None
+        return None, None
 
 
 # =========================
-# MAIN SCANNER
+# MAIN ENGINE
 # =========================
 def run():
-    signals = []
+    trades = []
+    biases = []
 
     for symbol in SYMBOLS:
-        signal = analyze(symbol)
+        trade, bias = analyze(symbol)
 
-        if signal:
-            signals.append(signal)
+        if bias:
+            biases.append(f"{symbol}: {bias}")
 
-        time.sleep(1)  # avoid blocking
+        if trade:
+            trades.append(f"{symbol}: {trade}")
 
-    if signals:
-        final_msg = "🚀 TOP TRADES:\n\n" + "\n".join(signals[:5])
-        send_message(final_msg)
+        time.sleep(1)
+
+    # Always send update (NO SILENCE)
+    message = "📊 MARKET UPDATE\n\n"
+
+    if biases:
+        message += "Bias:\n" + "\n".join(biases[:5]) + "\n\n"
+
+    if trades:
+        message += "🚀 Trades:\n" + "\n".join(trades[:5])
     else:
-        print("No strong signals")
+        message += "⚠️ No strong trades, wait"
+
+    send_message(message)
 
 
 # =========================
