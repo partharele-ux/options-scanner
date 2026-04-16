@@ -2,141 +2,92 @@ import requests
 import time
 import os
 from datetime import datetime
-import pytz
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# ======================
-# FULL F&O STOCK LIST
-# ======================
-ALL_SYMBOLS = [
-    "NIFTY","BANKNIFTY",
-    "HDFCBANK","ICICIBANK","AXISBANK","SBIN","KOTAKBANK","INDUSINDBK","PNB","BANKBARODA",
-    "INFY","TCS","WIPRO","HCLTECH","TECHM",
-    "RELIANCE","LT","ITC","ASIANPAINT","ULTRACEMCO",
-    "TATAMOTORS","MARUTI","M&M","HEROMOTOCO","EICHERMOT",
-    "BAJFINANCE","BAJAJFINSV","HDFCLIFE","SBILIFE","ICICIPRULI",
-    "ADANIPORTS","ADANIENT","JSWSTEEL","TATASTEEL","COALINDIA","POWERGRID"
+def send_message(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": text})
+
+def get_data(symbol):
+    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    session = requests.Session()
+    session.get("https://www.nseindia.com", headers=headers)
+    response = session.get(url, headers=headers)
+    return response.json()
+
+def analyze(symbol):
+    try:
+        data = get_data(symbol)
+        records = data["records"]["data"]
+        pcr = data["records"]["pcr"]
+
+        for item in records:
+            if "CE" in item and "PE" in item:
+
+                call_oi_change = item["CE"].get("changeinOpenInterest", 0)
+                put_oi_change = item["PE"].get("changeinOpenInterest", 0)
+                strike = item["strikePrice"]
+
+                # ==============================
+                # 🚫 NO TRADE ZONE (SIDEWAYS)
+                # ==============================
+                if (call_oi_change > 0 and put_oi_change > 0) or \
+                   (call_oi_change < 0 and put_oi_change < 0) or \
+                   (0.9 < pcr < 1.1):
+                    return None
+
+                # ==============================
+                # 🟢 STRONG CALL BUY
+                # ==============================
+                if put_oi_change > 0 and call_oi_change < 0 and pcr > 1.2:
+                    return f"🟢 {symbol} CALL BUY near {strike}"
+
+                # ==============================
+                # 🔴 STRONG PUT BUY
+                # ==============================
+                if call_oi_change > 0 and put_oi_change < 0 and pcr < 0.8:
+                    return f"🔴 {symbol} PUT BUY near {strike}"
+
+        return None
+
+    except Exception as e:
+        return None
+
+# 🔥 Stocks (keep focused for quality)
+stocks = [
+    "NIFTY", "BANKNIFTY", "RELIANCE", "HDFCBANK",
+    "ICICIBANK", "INFY", "TCS", "SBIN", "LT"
 ]
 
-# ======================
-# TELEGRAM
-# ======================
-def send_message(msg):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
-    except:
-        pass
+def is_market_open():
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return False
+    return 9 <= now.hour <= 15
 
-# ======================
-# TIME
-# ======================
-def get_time():
-    tz = pytz.timezone("Asia/Kolkata")
-    return datetime.now(tz)
+# ============================
+# 🔄 MAIN LOOP
+# ============================
+while True:
 
-# ======================
-# ROTATION SYSTEM
-# ======================
-def get_batch():
-    now = get_time()
-    batch_size = 8
+    if not is_market_open():
+        time.sleep(60)
+        continue
 
-    index = (now.minute // 5 * batch_size) % len(ALL_SYMBOLS)
-    return ALL_SYMBOLS[index:index + batch_size]
+    signals = []
 
-# ======================
-# FETCH DATA
-# ======================
-def get_data(symbol):
-    try:
-        if symbol in ["NIFTY","BANKNIFTY"]:
-            url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
-        else:
-            url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+    for stock in stocks:
+        result = analyze(stock)
+        if result:
+            signals.append(result)
 
-        headers = {"User-Agent": "Mozilla/5.0"}
-
-        s = requests.Session()
-        s.get("https://www.nseindia.com", headers=headers)
-        res = s.get(url, headers=headers)
-
-        return res.json()
-    except:
-        return None
-
-# ======================
-# ANALYSIS (BALANCED)
-# ======================
-def analyze(symbol):
-    data = get_data(symbol)
-    if not data:
-        return None
-
-    try:
-        records = data["records"]["data"]
-        price = data["records"]["underlyingValue"]
-
-        call_total = 0
-        put_total = 0
-
-        for r in records:
-            if "CE" in r and "PE" in r:
-                call_total += r["CE"].get("changeinOpenInterest", 0)
-                put_total += r["PE"].get("changeinOpenInterest", 0)
-
-        # ======================
-        # BIAS
-        # ======================
-        if put_total > call_total:
-            direction = "CALL 🟢"
-            entry = round(price + 10, 2)
-            sl = round(price - 70, 2)
-            target = round(price + 120, 2)
-
-        else:
-            direction = "PUT 🔴"
-            entry = round(price - 10, 2)
-            sl = round(price + 70, 2)
-            target = round(price - 120, 2)
-
-        return f"""{symbol} {direction}
-Entry: {entry}
-SL: {sl}
-Target: {target}"""
-
-    except:
-        return None
-
-# ======================
-# MAIN ENGINE
-# ======================
-def run():
-    symbols = get_batch()
-
-    trades = []
-
-    for sym in symbols:
-        t = analyze(sym)
-
-        if t:
-            trades.append(t)
-
-        time.sleep(1)
-
-    msg = "📊 LIVE TRADING ENGINE\n\n"
-
-    if trades:
-        msg += "\n\n".join(trades[:4])  # max 4 trades
+    if signals:
+        message = "🚀 HIGH PROBABILITY TRADES\n\n" + "\n".join(signals[:3])
+        send_message(message)
     else:
-        msg += "⚠️ No setups in this batch"
+        send_message("📊 MARKET UPDATE\nNo A-grade setup. Stay patient.")
 
-    send_message(msg)
-
-# ======================
-# EXECUTE
-# ======================
-if __name__ == "__main__":
-    run()
+    time.sleep(300)  # 5 minutes
